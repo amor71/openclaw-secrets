@@ -112,7 +112,25 @@ Users must be able to:
 4. **As an existing user**, I want to migrate my current plaintext secrets to the store automatically, and have the old files cleaned up
 5. **As a developer**, I want to commit my OpenClaw config to git without leaking secrets
 
-## 6. Open Questions
+## 6. Access & Prerequisites
+
+The system has two distinct access contexts with different requirements:
+
+### Setup-time (bootstrapping, migration)
+- Performed once, by an administrator (human or privileged agent)
+- Requires elevated GCP permissions: enable APIs, create secrets, configure IAM
+- May require `gcloud` CLI or equivalent tooling on the host
+- This is an explicit, interactive action — not something agents do autonomously
+
+### Runtime (agents fetching secrets)
+- Performed continuously, by agents during normal operation
+- Requires only read access to specific secrets the agent is authorized for
+- Must not require `gcloud` CLI — should work with standard application credentials (service account, compute metadata, workload identity)
+- Agents should not need or have permissions to create, modify, or delete secrets
+
+The requirements document must clearly distinguish which operations belong to which context, and what credentials/tools each requires.
+
+## 7. Open Questions
 
 1. Should secrets be passable to exec tool environments? (e.g., a script that needs an API key)
 2. Should there be an option to prevent startup entirely if any required secret is unresolvable?
