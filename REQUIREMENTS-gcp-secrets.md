@@ -36,7 +36,6 @@ This creates several risks:
 - AWS Secrets Manager, Azure Key Vault, HashiCorp Vault (follow same pattern)
 - Automatic secret rotation
 - UI for managing secrets
-- Migration tool for existing plaintext secrets (nice-to-have, could be a follow-up)
 
 ## 3. Requirements
 
@@ -154,6 +153,21 @@ A new top-level `secrets` section in `openclaw.json`:
 - `openclaw secrets test` — Test connectivity to all configured providers
 - `openclaw secrets set --provider gcp --name <name> --value <value>` — Store a secret (convenience command)
 
+### 3.9 Migration Tool
+
+Automated migration of existing plaintext secrets to the configured secrets provider:
+
+- `openclaw secrets migrate` — Scan config and auth profiles for plaintext secrets, store them in Secret Manager, replace with `${gcp:...}` references, and **delete the plaintext originals**
+- The migration flow:
+  1. **Scan** — Identify all plaintext secrets in `openclaw.json`, `auth-profiles.json`, and known credential files
+  2. **Upload** — Store each secret in GCP Secret Manager with a sensible naming convention (e.g., `openclaw-<agent>-<provider>-token`)
+  3. **Replace** — Update config files to use `${gcp:name}` references
+  4. **Verify** — Resolve all new references and confirm they return correct values
+  5. **Purge** — Delete plaintext credential files and redact values from config backups
+  6. **Report** — Summary of what was migrated, what was purged, and any manual steps remaining
+- Must be interactive (confirm before purging) with a `--yes` flag for automation
+- Should handle partial failures gracefully (don't purge what wasn't successfully stored)
+
 ## 4. Non-Functional Requirements
 
 - **Performance** — Secret resolution should add <100ms to startup (lazy loading helps)
@@ -171,11 +185,10 @@ A new top-level `secrets` section in `openclaw.json`:
 ## 6. Migration Path
 
 For existing users:
-1. Install: Set up GCP Secret Manager, store secrets
-2. Configure: Add `secrets.providers.gcp` to config
-3. Replace: Change plaintext values to `${gcp:name}` references
-4. Verify: `openclaw secrets test`
-5. Clean up: Remove old plaintext files, rotate compromised keys
+1. Configure: Add `secrets.providers.gcp` to config
+2. Run: `openclaw secrets migrate` — automatically scans, uploads, replaces, verifies, and purges
+3. Verify: `openclaw secrets test`
+4. Rotate: Any keys that were previously exposed in plaintext should be rotated as a best practice
 
 ## 7. Open Questions
 
