@@ -12,6 +12,11 @@ import {
   acknowledgeRotation,
   setRotationInterval,
 } from "../config/rotation-reminders.js";
+import {
+  rotateGatewayToken,
+  createDefaultDeps,
+  type RotationDeps,
+} from "../config/auto-rotation.js";
 
 // ---------------------------------------------------------------------------
 // Types for mock/test injection
@@ -377,4 +382,40 @@ export async function secretsRemindAckCommand(options: RemindAckOptions): Promis
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Rotate Command
+// ---------------------------------------------------------------------------
+
+interface RotateCommandOptions {
+  secret?: string;
+  _mockDeps?: Partial<RotationDeps>;
+}
+
+export async function secretsRotateCommand(options: RotateCommandOptions): Promise<number> {
+  const secretName = options.secret ?? "openclaw-main-gateway-token";
+
+  if (secretName !== "openclaw-main-gateway-token") {
+    console.error(`Error: Auto-rotation is only supported for "openclaw-main-gateway-token" currently.`);
+    return 1;
+  }
+
+  console.log(`Rotating secret: ${secretName}`);
+
+  const deps = createDefaultDeps(options._mockDeps);
+  const result = await rotateGatewayToken(deps);
+
+  if (!result.success) {
+    console.error(`Rotation failed: ${result.error}`);
+    if (result.oldToken) {
+      console.error(`Old token preserved. No changes made to config.`);
+    }
+    return 1;
+  }
+
+  console.log(`✓ New token stored in GCP (version: ${result.versionName ?? "latest"})`);
+  console.log(`✓ Local config updated`);
+  console.log(`⚠ Gateway restart required for new token to take effect`);
+  return 0;
 }
