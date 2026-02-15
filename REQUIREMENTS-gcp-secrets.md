@@ -147,6 +147,22 @@ Many secrets stored in the secrets manager are third-party API keys (e.g., Alpac
   - `expiresAt`: optional hard expiration date (if the provider issues keys with TTLs)
 - Rotation policy metadata must be stored alongside the secret (e.g., as secret labels/annotations in GCP Secret Manager)
 
+### 7.1.1 Recommended Rotation Intervals
+
+Default rotation intervals should follow industry best practices (NIST SP 800-63B, cloud provider recommendations):
+
+| Secret Type | Rotation | Recommended Interval | Rationale |
+|-------------|----------|---------------------|-----------|
+| Self-managed tokens (gateway, internal auth) | Auto | **30 days** | High privilege, zero cost to rotate. Follows AWS default and NIST guidance for high-value credentials. |
+| Third-party API keys (OpenAI, Anthropic, Brave, etc.) | Manual | **90 days** | Requires human action in provider dashboard. 90 days balances security with operational burden. |
+| Database credentials | Auto/Dynamic | **30 days** (static) / **1 hour** (dynamic/Vault) | Per NIST and cloud provider defaults. Dynamic credentials should be short-lived. |
+| Email/SMTP passwords | Manual | **180 days** | Lower risk, higher friction to rotate. |
+| Broker API keys (Alpaca, etc.) | Manual | **180 days** | Financial API keys — rotate semi-annually, or immediately on suspected compromise. |
+
+- These defaults must be configurable per secret — they are recommendations, not hard requirements
+- The system should apply the appropriate default interval based on secret type when no explicit interval is set
+- `openclaw secrets remind list` should flag secrets that exceed their recommended interval
+
 ### 7.2 Reminder Notifications
 
 - When a secret's `rotationIntervalDays` has elapsed since `lastRotated`, the system must emit a `secret:review-due` event
