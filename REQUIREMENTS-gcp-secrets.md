@@ -133,7 +133,49 @@ The system has two distinct access contexts with different requirements:
 
 The requirements document must clearly distinguish which operations belong to which context, and what credentials/tools each requires.
 
-## 7. Open Questions
+## 7. Manual Key Rotation Reminders
+
+Many secrets stored in the secrets manager are third-party API keys (e.g., Alpaca, Anthropic, OpenAI, Brave) that cannot be rotated programmatically — the provider issues a static key that must be manually regenerated in their dashboard. The system must help administrators stay on top of these keys.
+
+### 7.1 Rotation Policy per Secret
+
+- Each secret must support an optional rotation policy with:
+  - `rotationType`: `"auto"` | `"manual"` | `"dynamic"` (default: `"manual"`)
+  - `rotationIntervalDays`: recommended rotation interval in days (e.g., 90)
+  - `lastRotated`: timestamp of the last known rotation (set automatically on secret version creation, or manually via CLI)
+  - `expiresAt`: optional hard expiration date (if the provider issues keys with TTLs)
+- Rotation policy metadata must be stored alongside the secret (e.g., as secret labels/annotations in GCP Secret Manager)
+
+### 7.2 Reminder Notifications
+
+- When a secret's `rotationIntervalDays` has elapsed since `lastRotated`, the system must emit a `secret:review-due` event
+- When a secret's `expiresAt` is approaching (configurable threshold, default 14 days), emit `secret:expiring-soon`
+- Reminders must be surfaced to the administrator via:
+  - Agent notification in the active session (if running)
+  - CLI: `openclaw secrets status` shows overdue/expiring secrets prominently
+- Reminders must repeat at a configurable cadence (default: daily) until the secret is rotated or the reminder is snoozed
+- Snooze: `openclaw secrets remind snooze --secret <name> --days <n>` to temporarily suppress reminders
+
+### 7.3 Failure Detection
+
+- If an agent receives a 401/403 error from an API call using a managed secret, the system should emit a `secret:auth-failed` event with the secret name
+- This does not trigger auto-rotation (impossible for manual keys), but alerts the administrator that the key may be revoked, expired, or invalid
+- The failed secret should be flagged in `openclaw secrets status`
+
+### 7.4 CLI Commands
+
+- `openclaw secrets remind list` — show all secrets with their rotation status, last rotated date, and next review due date
+- `openclaw secrets remind set --secret <name> --interval-days <n>` — set or update rotation interval
+- `openclaw secrets remind snooze --secret <name> --days <n>` — snooze reminder
+- `openclaw secrets remind ack --secret <name>` — acknowledge rotation (updates `lastRotated` to now)
+
+### 7.5 User Stories
+
+7. **As an OpenClaw admin**, I want to be reminded when my API keys are due for rotation so I don't forget to regenerate them before they become a security risk
+8. **As a multi-agent operator**, I want to know immediately if any of my agents' API keys stop working, so I can replace them before it impacts service
+9. **As a security-conscious user**, I want visibility into which secrets haven't been rotated in a long time, so I can prioritize key hygiene
+
+## 8. Open Questions
 
 1. Should secrets be passable to exec tool environments? (e.g., a script that needs an API key)
 2. Should there be an option to prevent startup entirely if any required secret is unresolvable?
