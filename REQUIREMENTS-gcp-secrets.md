@@ -9,217 +9,115 @@
 
 ## 1. Problem Statement
 
-OpenClaw stores all credentials (API keys, tokens, secrets) in plaintext files on disk:
-- `openclaw.json` config file
-- `auth-profiles.json` per agent
-- User-created files (e.g., `~/.config/*/credentials.env`)
+OpenClaw stores all credentials (API keys, tokens, secrets) in plaintext files on disk. This creates the following problems:
 
-This creates several risks:
 1. **Exposure** — Anyone with shell access can read all secrets
-2. **No audit trail** — No visibility into when secrets were accessed
-3. **Rotation friction** — Changing a secret requires editing files and restarting
-4. **Version control conflict** — Config files can't be safely committed to git
-5. **Multi-agent leakage** — Agents can read each other's credential files
+2. **No isolation between agents** — In a multi-agent setup, all agents share filesystem access to all credential files. There is no way to restrict Agent A from reading Agent B's secrets.
+3. **No audit trail** — No visibility into when secrets were accessed or by whom
+4. **Rotation friction** — Changing a secret requires manual file edits and service restarts
+5. **Version control conflict** — Config files containing secrets can't be safely committed to git
 6. **Compliance** — Enterprise deployments require centralized secrets management
 
-## 2. Scope
+## 2. Goals
 
-### In Scope (this PR)
-- GCP Secret Manager as the first external secrets provider
-- Secret reference syntax in `openclaw.json` config
-- Runtime resolution of secret references
-- Caching with configurable TTL
-- Graceful fallback and clear error messages
+1. Secrets must be stored in a centralized, encrypted, access-controlled secrets store — not in plaintext files
+2. Agents must be able to retrieve secrets they are authorized to access, at runtime
+3. Each agent's access to secrets must be independently controllable (agent-level isolation)
+4. The system must be able to set itself up from scratch (create the secrets store, enable required APIs, configure access controls) if nothing exists yet
+5. Existing plaintext secrets must be automatically migrated to the secrets store and purged from disk
+6. The solution must not break existing OpenClaw installations that don't use a secrets store
+
+## 3. Scope
+
+### In Scope
+- GCP Secret Manager as the first secrets provider
+- Bootstrapping: automated setup of GCP Secret Manager (enable APIs, create resources, configure IAM) when it doesn't exist
+- Secret references in OpenClaw config files, resolved at runtime
+- Per-agent secret isolation via access controls
+- Migration tool: automatically move existing plaintext secrets to the store and purge originals
+- CLI commands for managing secrets
 - Documentation
 
 ### Out of Scope (future work)
-- AWS Secrets Manager, Azure Key Vault, HashiCorp Vault (follow same pattern)
+- Other providers (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault) — should follow the same pattern established here
 - Automatic secret rotation
 - UI for managing secrets
 
-## 3. Requirements
+## 4. Functional Requirements
 
-### 3.1 Secret Reference Syntax
+### 4.1 Secret Storage & Retrieval
 
-Secrets in config files are referenced using a URI-like syntax:
+- Secrets must be stored in GCP Secret Manager, not on the local filesystem
+- Agents must be able to reference secrets in configuration files without knowing the actual values
+- Secrets must be fetched at runtime when needed
+- Retrieved secrets must be cached in memory to avoid repeated network calls
+- Cached secrets must never be written to disk
+- Secret values must never appear in logs, error messages, or API responses
 
-```
-${provider:secret-name}
-${provider:secret-name#version}
-```
+### 4.2 Per-Agent Isolation
 
-Example in `openclaw.json`:
-```json
-{
-  "tools": {
-    "web": {
-      "search": {
-        "apiKey": "${gcp:openclaw-brave-api-key}"
-      }
-    }
-  },
-  "channels": {
-    "slack": {
-      "botToken": "${gcp:openclaw-slack-bot-token}"
-    }
-  }
-}
-```
+- In a multi-agent setup, each agent must only be able to access secrets it is authorized for
+- It must be possible to grant Agent A access to secret X without granting Agent B the same access
+- The access control mechanism must use the secrets store's native access control (IAM), not application-level enforcement
 
-### 3.2 Provider Configuration
+### 4.3 Bootstrapping
 
-A new top-level `secrets` section in `openclaw.json`:
+When a user first enables the secrets provider:
 
-```json
-{
-  "secrets": {
-    "providers": {
-      "gcp": {
-        "project": "my-gcp-project",
-        "cacheTtlSeconds": 300
-      }
-    },
-    "defaults": {
-      "provider": "gcp",
-      "cacheTtlSeconds": 300
-    }
-  }
-}
-```
+- If the GCP Secret Manager API is not enabled, enable it
+- If required IAM roles/service accounts don't exist, create them
+- If per-agent service accounts are needed for isolation, create and configure them
+- The bootstrapping must be idempotent (safe to run multiple times)
+- The user must be informed of all changes being made and asked to confirm
 
-### 3.3 Resolution Behavior
+### 4.4 Migration
 
-1. **Parse time** — When config is loaded, scan all string values for `${...}` patterns
-2. **Lazy resolution** — Fetch secrets only when the config value is first accessed (not at startup for unused secrets)
-3. **Caching** — Cache resolved values in memory with TTL (default: 5 minutes)
-4. **Cache invalidation** — On config reload / SIGUSR1 restart, clear the cache
-5. **Fallback** — If a secret reference cannot be resolved:
-   - Log a clear error identifying which secret failed and why
-   - Do NOT fall back to treating the reference string as a literal value
-   - The feature/channel that depends on the secret should fail gracefully
+For existing installations with plaintext secrets:
 
-### 3.4 GCP Secret Manager Specifics
+- Scan all known locations for plaintext secrets (config files, auth profiles, credential files)
+- Upload each secret to the secrets store
+- Replace plaintext values in config files with secret references
+- Verify that all references resolve correctly
+- Purge plaintext originals from disk
+- Handle partial failures gracefully — never purge a secret that wasn't successfully stored
+- Must be interactive (confirm before destructive actions) with an option to skip confirmation for automation
 
-- Use `@google-cloud/secret-manager` npm package
-- Authenticate via Application Default Credentials (ADC) — supports:
-  - Service account key file (`GOOGLE_APPLICATION_CREDENTIALS`)
-  - Compute Engine / GKE metadata server
-  - `gcloud auth application-default login`
-- Secret name format: `projects/{project}/secrets/{name}/versions/{version}`
-  - Default version: `latest`
-  - Users specify just the short name; provider constructs the full resource path
-- Support accessing secrets across projects (if IAM allows):
-  ```
-  ${gcp:projects/other-project/secrets/my-secret}
-  ```
+### 4.5 CLI
 
-### 3.5 Auth Profile Integration
+Users must be able to:
 
-`auth-profiles.json` should also support secret references:
+- Check the status of the secrets provider (is it set up? is it reachable?)
+- Test that all secret references in the current config resolve successfully
+- Manually store a new secret
+- Run the migration from plaintext to secrets store
+- Run the bootstrap setup
 
-```json
-{
-  "profiles": {
-    "openai:default": {
-      "type": "token",
-      "provider": "openai",
-      "token": "${gcp:openclaw-openai-key}"
-    }
-  }
-}
-```
+### 4.6 Error Handling
 
-### 3.6 Security Requirements
+- If a secret cannot be retrieved, the error must clearly identify which secret failed and why (not found, permission denied, network error, provider not configured)
+- A missing secret must not cause the entire system to crash — only the feature that depends on it should fail
+- If the secrets provider is unreachable, previously cached values should be usable as a fallback
 
-- Secret values MUST NOT be logged (not even at debug level)
-- Secret values MUST NOT appear in error messages
-- The `config.get` API (and CLI) MUST redact resolved secret values (show `${gcp:name}` or `[REDACTED]`)
-- Cache is in-memory only — never written to disk
-- Secret references in config should be clearly distinguishable from literal values
+### 4.7 Backward Compatibility
 
-### 3.7 Error Handling
-
-| Scenario | Behavior |
-|---|---|
-| Provider not configured | Error at resolution time: "Secrets provider 'gcp' not configured" |
-| Secret not found | Error: "Secret 'name' not found in GCP project 'project'" |
-| Permission denied | Error: "Permission denied accessing secret 'name'. Check IAM roles." |
-| Network error | Error with retry (1 retry, 5s timeout). Then fail with clear message. |
-| Invalid reference syntax | Error at config parse time: "Invalid secret reference: '...'" |
-
-### 3.8 CLI Support
-
-- `openclaw secrets list` — List configured providers and their status
-- `openclaw secrets test` — Test connectivity to all configured providers
-- `openclaw secrets set --provider gcp --name <name> --value <value>` — Store a secret (convenience command)
-
-### 3.9 Migration Tool
-
-Automated migration of existing plaintext secrets to the configured secrets provider:
-
-- `openclaw secrets migrate` — Scan config and auth profiles for plaintext secrets, store them in Secret Manager, replace with `${gcp:...}` references, and **delete the plaintext originals**
-- The migration flow:
-  1. **Scan** — Identify all plaintext secrets in `openclaw.json`, `auth-profiles.json`, and known credential files
-  2. **Upload** — Store each secret in GCP Secret Manager with a sensible naming convention (e.g., `openclaw-<agent>-<provider>-token`)
-  3. **Replace** — Update config files to use `${gcp:name}` references
-  4. **Verify** — Resolve all new references and confirm they return correct values
-  5. **Purge** — Delete plaintext credential files and redact values from config backups
-  6. **Report** — Summary of what was migrated, what was purged, and any manual steps remaining
-- Must be interactive (confirm before purging) with a `--yes` flag for automation
-- Should handle partial failures gracefully (don't purge what wasn't successfully stored)
-
-## 4. Non-Functional Requirements
-
-- **Performance** — Secret resolution should add <100ms to startup (lazy loading helps)
-- **Reliability** — If GCP is unreachable, cached values should be used if available (stale-while-revalidate)
-- **Compatibility** — Config files without secret references should work exactly as before (zero breaking changes)
-- **Testing** — Unit tests with mocked GCP client; integration test guide in docs
+- Existing OpenClaw installations that don't configure a secrets provider must continue to work exactly as they do today
+- The secrets feature must be entirely opt-in
+- No new required dependencies
 
 ## 5. User Stories
 
-1. **As an OpenClaw admin**, I want to store API keys in GCP Secret Manager so they're not in plaintext on my server
-2. **As a multi-agent operator**, I want each agent's credentials isolated via IAM so Agent A can't access Agent B's secrets
-3. **As a developer**, I want to commit my `openclaw.json` to git without leaking secrets
-4. **As an enterprise user**, I want an audit trail of when my API keys were accessed
+1. **As an OpenClaw admin**, I want to store API keys in an encrypted secrets store so they're not exposed in plaintext on my server
+2. **As a multi-agent operator**, I want each agent to only access its own secrets, so a compromised or misbehaving agent can't read another agent's credentials
+3. **As a new user**, I want the system to set up the secrets infrastructure for me, so I don't have to manually configure GCP Secret Manager, IAM roles, and service accounts
+4. **As an existing user**, I want to migrate my current plaintext secrets to the store automatically, and have the old files cleaned up
+5. **As a developer**, I want to commit my OpenClaw config to git without leaking secrets
 
-## 6. Migration Path
+## 6. Open Questions
 
-For existing users:
-1. Configure: Add `secrets.providers.gcp` to config
-2. Run: `openclaw secrets migrate` — automatically scans, uploads, replaces, verifies, and purges
-3. Verify: `openclaw secrets test`
-4. Rotate: Any keys that were previously exposed in plaintext should be rotated as a best practice
-
-## 7. Open Questions
-
-1. Should we support secret references in **environment variables** passed to exec tools? (e.g., `env: { "API_KEY": "${gcp:my-key}" }`)
-2. Should there be a `secrets.required` flag that prevents startup if any secret is unresolvable?
-3. Should the caching layer be shared across agents or per-agent?
+1. Should secrets be passable to exec tool environments? (e.g., a script that needs an API key)
+2. Should there be an option to prevent startup entirely if any required secret is unresolvable?
+3. How should the system handle secret versioning? (always latest, or allow pinning?)
 
 ---
 
-## Appendix: Architecture Sketch
-
-```
-openclaw.json (with ${gcp:...} references)
-    │
-    ▼
-Config Parser ──► Secret Reference Scanner
-    │                    │
-    │                    ▼
-    │              Secret Resolver
-    │                    │
-    │         ┌──────────┼──────────┐
-    │         ▼          ▼          ▼
-    │      GCP SM    AWS SM     Vault
-    │      Provider  Provider   Provider
-    │         │
-    │         ▼
-    │    GCP Secret Manager API
-    │         │
-    │         ▼
-    │    In-Memory Cache (TTL)
-    │         │
-    ▼         ▼
-Resolved Config (secrets in memory only)
-```
+*This document describes WHAT the system must do. The HOW (architecture, interfaces, data flow, technology choices) will be covered in the Design document.*
