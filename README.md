@@ -13,9 +13,9 @@ A contribution to [OpenClaw](https://github.com/openclaw/openclaw) adding native
 
 ## Status
 
-- [x] Requirements — drafted & reviewed
-- [ ] Design — drafted, pending review
-- [ ] Tests — not started
+- [x] Requirements — approved ✅
+- [x] Design — approved ✅
+- [ ] Tests — in progress
 - [ ] Implementation — not started
 - [ ] PR to openclaw/openclaw — not started
 
