@@ -26,6 +26,7 @@ OpenClaw stores all credentials (API keys, tokens, secrets) in plaintext files o
 4. The system must be able to set itself up from scratch (create the secrets store, enable required APIs, configure access controls) if nothing exists yet
 5. Existing plaintext secrets must be automatically migrated to the secrets store and purged from disk
 6. The solution must not break existing OpenClaw installations that don't use a secrets store
+7. Secrets that cannot be rotated automatically must be tracked with rotation reminders, so administrators are proactively alerted when keys are due for review or have stopped working
 
 ## 3. Scope
 
@@ -39,8 +40,8 @@ OpenClaw stores all credentials (API keys, tokens, secrets) in plaintext files o
 - Documentation
 
 ### Out of Scope (future work)
-- Other providers (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault) — should follow the same pattern established here
-- Automatic secret rotation
+- Other providers (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault) — should follow the same pattern established here *(now in scope — see [multi-provider requirements](https://github.com/amor71/openclaw-secrets-providers/blob/main/REQUIREMENTS.md))*
+- Automatic secret rotation via provider-native mechanisms *(now in scope — see multi-provider requirements §11)*
 - UI for managing secrets
 
 ## 4. Functional Requirements
