@@ -15,30 +15,16 @@ This document describes HOW the external secrets management feature will be impl
 
 The system introduces three new components into the OpenClaw config pipeline:
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     Config Pipeline                      │
-│                                                         │
-│  openclaw.json                                          │
-│       │                                                 │
-│       ▼                                                 │
-│  JSON5 Parse                                            │
-│       │                                                 │
-│       ▼                                                 │
-│  Include Resolution  (existing)                         │
-│       │                                                 │
-│       ▼                                                 │
-│  Env Var Substitution  (existing: env-substitution.ts)  │
-│       │                                                 │
-│       ▼                                                 │
-│  Secret Resolution  (NEW: secret-resolution.ts)         │
-│       │                                                 │
-│       ▼                                                 │
-│  Validation (Zod schema)                                │
-│       │                                                 │
-│       ▼                                                 │
-│  Resolved Config (in memory)                            │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[openclaw.json] --> B[JSON5 Parse]
+    B --> C[Include Resolution]
+    C --> D[Env Var Substitution]
+    D --> E[Secret Resolution ✨ NEW]
+    E --> F[Validation - Zod Schema]
+    F --> G[Resolved Config - in memory]
+
+    style E fill:#2d6a4f,stroke:#52b788,color:#fff
 ```
 
 The three new components:
@@ -155,16 +141,28 @@ interface SecretProvider {
 
 Config loading in OpenClaw is currently synchronous (`loadConfig()` returns `OpenClawConfig`). Secret resolution requires async network calls. Two approaches:
 
-**Option A: Separate async post-processing step**
-- `loadConfig()` remains sync, returns config with unresolved `${gcp:...}` strings
-- New `resolveConfigSecrets(config)` called async after load
-- Gateway startup awaits secret resolution before accepting connections
-- Least invasive to existing code
+`loadConfig()` remains synchronous and returns config with unresolved `${gcp:...}` strings. A separate async function `resolveConfigSecrets(config)` is called after load. Gateway startup awaits secret resolution before accepting connections.
 
-**Option B: Make loadConfig async**
-- More architecturally clean but high blast radius — many call sites would need updating
+This is the least invasive approach — secret resolution is an optional post-processing step that only runs if a `secrets` config section exists. No changes to existing synchronous call sites.
 
-**Recommendation: Option A** — minimal changes to existing code, secret resolution is an optional post-processing step that only runs if `secrets` config section exists.
+```mermaid
+sequenceDiagram
+    participant GW as Gateway Startup
+    participant IO as Config IO
+    participant SR as Secret Resolution
+    participant GCP as GCP Secret Manager
+
+    GW->>IO: loadConfig() [sync]
+    IO-->>GW: config with ${gcp:...} refs
+    GW->>SR: resolveConfigSecrets(config) [async]
+    SR->>SR: Walk config tree, collect refs
+    SR->>SR: Check in-memory cache
+    SR->>GCP: Fetch cache misses (parallel)
+    GCP-->>SR: Secret values
+    SR->>SR: Cache with TTL
+    SR-->>GW: Resolved config
+    GW->>GW: Accept connections
+```
 
 ## 5. GCP Provider Implementation
 
