@@ -111,6 +111,7 @@ Users must be able to:
 3. **As a new user**, I want the system to set up the secrets infrastructure for me, so I don't have to manually configure GCP Secret Manager, IAM roles, and service accounts
 4. **As an existing user**, I want to migrate my current plaintext secrets to the store automatically, and have the old files cleaned up
 5. **As a developer**, I want to commit my OpenClaw config to git without leaking secrets
+6. **As a lead agent with sub-agents**, I want to grant my sub-agents access to only the secrets they need for their tasks (e.g., Chai gets Alpaca read-only keys but not my Anthropic key), without storing credentials in shared files on disk
 
 ## 6. Access & Prerequisites
 
