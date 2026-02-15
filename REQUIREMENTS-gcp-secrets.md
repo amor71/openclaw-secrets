@@ -128,6 +128,8 @@ The system has two distinct access contexts with different requirements:
 - Requires only read access to specific secrets the agent is authorized for
 - Must not require `gcloud` CLI — should work with standard application credentials (service account, compute metadata, workload identity)
 - Agents should not need or have permissions to create, modify, or delete secrets
+- On Compute Engine VMs: requires `cloud-platform` OAuth scope and the `roles/secretmanager.secretAccessor` IAM role on the VM's service account
+- Documentation must include clear instructions for both `gcloud` CLI and GCP Console setup of these prerequisites
 
 The requirements document must clearly distinguish which operations belong to which context, and what credentials/tools each requires.
 
